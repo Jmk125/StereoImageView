@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Log
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -52,7 +53,52 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashReporter()
+        try {
+            setUpUi(savedInstanceState)
+        } catch (t: Throwable) {
+            showCrash("Startup error:\n" + Log.getStackTraceString(t))
+        }
+        showPreviousCrash()
+    }
 
+    // Writes uncaught exceptions to a file so the next launch can show them on screen.
+    private fun installCrashReporter() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                java.io.File(filesDir, "crash.txt").writeText(Log.getStackTraceString(e))
+            } catch (_: Throwable) {
+            }
+            previous?.uncaughtException(t, e)
+        }
+    }
+
+    private fun showPreviousCrash() {
+        val f = java.io.File(filesDir, "crash.txt")
+        if (!f.exists()) return
+        val text = f.readText()
+        f.delete()
+        showCrash("The app crashed last time:\n$text")
+    }
+
+    private fun showCrash(text: String) {
+        val tv = TextView(this).apply {
+            this.text = text
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setTextIsSelectable(true)
+            setPadding(24, 24, 24, 24)
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(tv) }
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Crash report - please screenshot this")
+            .setView(scroll)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun setUpUi(savedInstanceState: Bundle?) {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.BLACK)
