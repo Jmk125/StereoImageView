@@ -50,6 +50,39 @@ class MainActivity : Activity() {
     private lateinit var panes: Array<Pane>
     private var pendingPane = -1
     private var linked = true
+    private var sizePercent = 100
+    private lateinit var pairView: LinearLayout
+    private lateinit var outerView: FrameLayout
+
+    /** Shrinks the image pair toward the centre of the screen so the eyes have less distance to travel. */
+    private fun applyPairSize() {
+        val w = (outerView.width * sizePercent / 100f).roundToInt()
+        val h = (outerView.height * sizePercent / 100f).roundToInt()
+        if (w <= 0 || h <= 0) return
+        val lp = pairView.layoutParams
+        if (lp.width != w || lp.height != h) {
+            lp.width = w
+            lp.height = h
+            pairView.layoutParams = lp
+        }
+    }
+
+    private fun chooseSize() {
+        val options = intArrayOf(100, 90, 80, 70, 60, 50, 40)
+        val labels = options.map { if (it == sizePercent) "$it%  (current)" else "$it%" }.toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Size of the image pair (smaller = eyes travel less)")
+            .setItems(labels) { _, which ->
+                val old = sizePercent
+                sizePercent = options[which]
+                getSharedPreferences("prefs", MODE_PRIVATE).edit().putInt("sizePercent", sizePercent).apply()
+                // Keep each image's framing the same relative to its (resized) half.
+                val ratio = sizePercent / old.toFloat()
+                panes.forEach { it.view.setTransform(it.view.zoom, it.view.panX * ratio, it.view.panY * ratio) }
+                applyPairSize()
+            }
+            .show()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,12 +132,15 @@ class MainActivity : Activity() {
     }
 
     private fun setUpUi(savedInstanceState: Bundle?) {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.BLACK)
-        }
+        sizePercent = getSharedPreferences("prefs", MODE_PRIVATE).getInt("sizePercent", 100)
+        val outer = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        pairView = root
+        outerView = outer
+        outer.addView(root, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        outer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPairSize() }
         panes = arrayOf(buildPane(root, 0, "Left"), buildPane(root, 1, "Right"))
-        setContentView(root)
+        setContentView(outer)
         goImmersive() // must come after setContentView
 
         val st = savedInstanceState
@@ -225,6 +261,7 @@ class MainActivity : Activity() {
             if (linked) "Pan/zoom: moving BOTH (tap to adjust only this one)"
             else "Pan/zoom: moving only this one (tap to move BOTH)",
             "Reset pan/zoom",
+            "Image size: $sizePercent% (tap to change)",
             "Choose a different image",
         )
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
@@ -244,7 +281,8 @@ class MainActivity : Activity() {
                         ).show()
                     }
                     4 -> panes.forEach { it.view.setTransform(1f, 0f, 0f) }
-                    5 -> pick(index)
+                    5 -> chooseSize()
+                    6 -> pick(index)
                 }
             }
             .show()

@@ -9,3 +9,5 @@ Landscape-only Android app that shows two photos side by side for stereoscopic (
 - "Save aligned image" saves exactly what that half shows (rotation, zoom, pan) at full photo resolution (capped at 6000px) to `Pictures/StereoImageView`.
 
 Build: `./gradlew assembleDebug` (APK in `app/build/outputs/apk/debug/`). The GitHub Actions workflow also builds it and uploads the APK as an artifact.
+
+- Long-press > "Image size" shrinks the image pair toward the center of the screen (100% down to 40%) so your eyes need less travel to fuse them. The choice is remembered.
