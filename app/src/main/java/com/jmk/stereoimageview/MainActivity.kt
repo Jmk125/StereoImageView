@@ -6,36 +6,40 @@ import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.view.Gravity
 import android.view.GestureDetector
+import android.view.Gravity
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
- * Two image panes side by side (meant to be used with the phone held in landscape).
+ * Two image panes side by side with no gap (meant for landscape).
  *  - tap a pane: pick an image from the gallery
- *  - long-press a pane: rotate left/right, or save the aligned (rotated) image
+ *  - drag: pan, pinch: zoom (applied to both images while "linked", otherwise just the touched one)
+ *  - long-press: rotate, link/unlink, reset, save aligned image
  */
 class MainActivity : Activity() {
 
-    private class Pane(val name: String, val view: ImageView, val hint: TextView) {
+    private class Pane(val name: String, val view: ZoomPane, val hint: TextView) {
         var uri: Uri? = null
         var exifMatrix: Matrix = Matrix()
         var base: Bitmap? = null      // downscaled, EXIF applied
@@ -44,6 +48,7 @@ class MainActivity : Activity() {
 
     private lateinit var panes: Array<Pane>
     private var pendingPane = -1
+    private var linked = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,13 +59,20 @@ class MainActivity : Activity() {
         }
         panes = arrayOf(buildPane(root, 0, "Left"), buildPane(root, 1, "Right"))
         setContentView(root)
-        goImmersive() // must come after setContentView: insetsController is null/crashes before the decor exists
+        goImmersive() // must come after setContentView
 
-        pendingPane = savedInstanceState?.getInt("pending", -1) ?: -1
-        // Restore previously chosen images (URI read grants last for the app process).
-        for (i in panes.indices) {
-            savedInstanceState?.getString("uri$i")?.let { s ->
-                savedInstanceState.getInt("rot$i").let { r -> loadInto(i, Uri.parse(s), r, silent = true) }
+        val st = savedInstanceState
+        if (st != null) {
+            pendingPane = st.getInt("pending", -1)
+            linked = st.getBoolean("linked", true)
+            for (i in panes.indices) {
+                val s = st.getString("uri$i") ?: continue
+                loadInto(
+                    i, Uri.parse(s), st.getInt("rot$i"), silent = true,
+                    transform = floatArrayOf(
+                        st.getFloat("zoom$i", 1f), st.getFloat("px$i", 0f), st.getFloat("py$i", 0f)
+                    )
+                )
             }
         }
     }
@@ -68,9 +80,13 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putInt("pending", pendingPane)
+        outState.putBoolean("linked", linked)
         panes.forEachIndexed { i, p ->
             p.uri?.let { outState.putString("uri$i", it.toString()) }
             outState.putInt("rot$i", p.rotation)
+            outState.putFloat("zoom$i", p.view.zoom)
+            outState.putFloat("px$i", p.view.panX)
+            outState.putFloat("py$i", p.view.panY)
         }
     }
 
@@ -107,12 +123,11 @@ class MainActivity : Activity() {
 
     private fun buildPane(root: LinearLayout, index: Int, name: String): Pane {
         val frame = FrameLayout(this)
-        val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        if (index == 0) lp.marginEnd = dp(1) else lp.marginStart = dp(1)
-        root.addView(frame, lp)
+        // No margins: the two halves touch so the eyes can fuse them.
+        root.addView(frame, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
 
-        val iv = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
-        frame.addView(iv, FrameLayout.LayoutParams(-1, -1))
+        val zoomView = ZoomPane(this)
+        frame.addView(zoomView, FrameLayout.LayoutParams(-1, -1))
 
         val hint = TextView(this).apply {
             text = "Tap to load $name image"
@@ -122,8 +137,16 @@ class MainActivity : Activity() {
         }
         frame.addView(hint, FrameLayout.LayoutParams(-1, -1))
 
-        val pane = Pane(name, iv, hint)
+        val pane = Pane(name, zoomView, hint)
 
+        fun targets(): List<Pane> = if (linked) panes.toList() else listOf(pane)
+
+        val scaleDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                targets().forEach { it.view.zoomBy(d.scaleFactor, d.focusX, d.focusY) }
+                return true
+            }
+        })
         val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
             override fun onSingleTapUp(e: MotionEvent): Boolean {
@@ -133,8 +156,17 @@ class MainActivity : Activity() {
             override fun onLongPress(e: MotionEvent) {
                 if (pane.base == null) pick(index) else showMenu(index)
             }
+            override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+                if (scaleDetector.isInProgress || e2.pointerCount > 1) return false
+                targets().forEach { it.view.pan(-dx, -dy) }
+                return true
+            }
         })
-        frame.setOnTouchListener { _, ev -> detector.onTouchEvent(ev) }
+        frame.setOnTouchListener { _, ev ->
+            scaleDetector.onTouchEvent(ev)
+            detector.onTouchEvent(ev)
+            true
+        }
         return pane
     }
 
@@ -144,6 +176,9 @@ class MainActivity : Activity() {
             "Rotate left (90° counter-clockwise)",
             "Rotate right (90° clockwise)",
             "Save aligned image",
+            if (linked) "Pan/zoom: moving BOTH (tap to adjust only this one)"
+            else "Pan/zoom: moving only this one (tap to move BOTH)",
+            "Reset pan/zoom",
             "Choose a different image",
         )
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
@@ -153,7 +188,17 @@ class MainActivity : Activity() {
                     0 -> rotate(index, -90)
                     1 -> rotate(index, 90)
                     2 -> saveAligned(index)
-                    3 -> pick(index)
+                    3 -> {
+                        linked = !linked
+                        Toast.makeText(
+                            this,
+                            if (linked) "Pan/zoom now moves both images"
+                            else "Pan/zoom now moves only the image you touch",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    4 -> panes.forEach { it.view.setTransform(1f, 0f, 0f) }
+                    5 -> pick(index)
                 }
             }
             .show()
@@ -165,17 +210,19 @@ class MainActivity : Activity() {
         refresh(p)
     }
 
+    private fun rotated(b: Bitmap, degrees: Int): Bitmap =
+        if (degrees == 0) b else Bitmap.createBitmap(
+            b, 0, 0, b.width, b.height, Matrix().apply { setRotate(degrees.toFloat()) }, true
+        )
+
     private fun refresh(p: Pane) {
         val b = p.base
         if (b == null) {
-            p.view.setImageDrawable(null)
+            p.view.setImage(null)
             p.hint.visibility = View.VISIBLE
             return
         }
-        val shown = if (p.rotation == 0) b else Bitmap.createBitmap(
-            b, 0, 0, b.width, b.height, Matrix().apply { setRotate(p.rotation.toFloat()) }, true
-        )
-        p.view.setImageBitmap(shown)
+        p.view.setImage(rotated(b, p.rotation))
         p.hint.visibility = View.GONE
     }
 
@@ -196,16 +243,16 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQ_PICK || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        if (pendingPane in panes.indices) loadInto(pendingPane, uri, 0, silent = false)
+        if (pendingPane in panes.indices) loadInto(pendingPane, uri, 0, silent = false, transform = null)
     }
 
-    private fun loadInto(index: Int, uri: Uri, rotation: Int, silent: Boolean) {
+    /** [transform] = (zoom, panX, panY) to restore, or null to line up with the other image. */
+    private fun loadInto(index: Int, uri: Uri, rotation: Int, silent: Boolean, transform: FloatArray?) {
         thread {
             val result = try {
                 val exif = readExifMatrix(uri)
-                val bmp = decode(uri, exif, DISPLAY_MAX)
-                exif to bmp
-            } catch (e: Exception) {
+                exif to decode(uri, exif, DISPLAY_MAX)
+            } catch (e: Throwable) {
                 null
             }
             runOnUiThread {
@@ -219,6 +266,14 @@ class MainActivity : Activity() {
                 p.base = result.second
                 p.rotation = rotation
                 refresh(p)
+                if (transform != null) {
+                    p.view.setTransform(transform[0], transform[1], transform[2])
+                } else {
+                    // Start at the same zoom/pan as the other image so the pair stays lined up.
+                    val other = panes[1 - index]
+                    if (other.base != null) p.view.setTransform(other.view.zoom, other.view.panX, other.view.panY)
+                    else p.view.setTransform(1f, 0f, 0f)
+                }
             }
         }
     }
@@ -258,19 +313,44 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- saving
 
+    /**
+     * Saves exactly what this half currently shows (rotation, zoom and pan applied),
+     * rendered from the full-resolution photo.
+     */
     private fun saveAligned(index: Int) {
         val p = panes[index]
         val uri = p.uri ?: return
+        val base = p.base ?: return
+        val vm = p.view.viewMatrix() ?: return
+        val vw = p.view.width
+        val vh = p.view.height
+        val viewScale = p.view.currentScale()
         val rotation = p.rotation
         val exif = p.exifMatrix
         Toast.makeText(this, "Saving…", Toast.LENGTH_SHORT).show()
         thread {
             val ok = try {
                 val full = decode(uri, exif, SAVE_MAX) ?: throw IllegalStateException()
-                val out = if (rotation == 0) full else Bitmap.createBitmap(
-                    full, 0, 0, full.width, full.height,
-                    Matrix().apply { setRotate(rotation.toFloat()) }, true
-                )
+                val fullRot = rotated(full, rotation)
+                // full-res pixels per display-bitmap pixel
+                val r = full.width / base.width.toFloat()
+                // output pixels per view pixel, so the photo is kept at full resolution
+                var k = r / viewScale
+                val biggest = max(vw, vh) * k
+                if (biggest > SAVE_MAX) k *= SAVE_MAX / biggest
+
+                val outW = (vw * k).roundToInt().coerceAtLeast(1)
+                val outH = (vh * k).roundToInt().coerceAtLeast(1)
+                val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(out)
+                canvas.drawColor(Color.BLACK)
+                val m = Matrix().apply {
+                    setScale(1f / r, 1f / r)   // full-res px -> display px
+                    postConcat(vm)             // -> view px
+                    postScale(k, k)            // -> output px
+                }
+                canvas.drawBitmap(fullRot, m, Paint(Paint.FILTER_BITMAP_FLAG))
+
                 val name = "stereo_${p.name.lowercase()}_${System.currentTimeMillis()}.jpg"
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, name)
@@ -298,11 +378,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
     companion object {
         private const val REQ_PICK = 1
-        private const val DISPLAY_MAX = 2048
+        private const val DISPLAY_MAX = 3072
         private const val SAVE_MAX = 6000
     }
 }
