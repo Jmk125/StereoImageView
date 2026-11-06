@@ -47,7 +47,6 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        goImmersive()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -55,6 +54,7 @@ class MainActivity : Activity() {
         }
         panes = arrayOf(buildPane(root, 0, "Left"), buildPane(root, 1, "Right"))
         setContentView(root)
+        goImmersive() // must come after setContentView: insetsController is null/crashes before the decor exists
 
         pendingPane = savedInstanceState?.getInt("pending", -1) ?: -1
         // Restore previously chosen images (URI read grants last for the app process).
@@ -79,7 +79,13 @@ class MainActivity : Activity() {
         if (hasFocus) goImmersive()
     }
 
-    private fun goImmersive() {
+    private fun goImmersive() = try {
+        applyImmersive()
+    } catch (e: Exception) {
+        // Cosmetic only; never let it take the app down.
+    }
+
+    private fun applyImmersive() {
         if (Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(false)
             window.insetsController?.let {
