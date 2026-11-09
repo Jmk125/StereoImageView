@@ -265,6 +265,7 @@ class MainActivity : Activity() {
             "Reset pan/zoom",
             "Image size: $sizePercent% (tap to change)",
             "Choose a different image",
+            "Browse files (reopens in last folder)",
         )
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle("${pane.name} image")
@@ -286,6 +287,7 @@ class MainActivity : Activity() {
                     5 -> panes.forEach { it.view.setTransform(1f, 0f, 0f) }
                     6 -> chooseSize()
                     7 -> pick(index)
+                    8 -> browse(index)
                 }
             }
             .show()
@@ -330,9 +332,27 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- picking / loading
 
+    /** Normal tap: the system photo picker with checkboxes, so two photos can be ticked at once. */
     private fun pick(index: Int) {
         pendingPane = index
-        // OPEN_DOCUMENT honours EXTRA_INITIAL_URI, so the picker can reopen where the last photo came from.
+        val intent = if (Build.VERSION.SDK_INT >= 33) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2)
+            }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQ_PICK)
+    }
+
+    /** Menu option: file-style picker that reopens in the folder of the last photo chosen this way. */
+    private fun browse(index: Int) {
+        pendingPane = index
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             type = "image/*"
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -345,18 +365,18 @@ class MainActivity : Activity() {
             }
         }
         @Suppress("DEPRECATION")
-        startActivityForResult(intent, REQ_PICK)
+        startActivityForResult(intent, REQ_BROWSE)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_PICK || resultCode != RESULT_OK) return
+        if ((requestCode != REQ_PICK && requestCode != REQ_BROWSE) || resultCode != RESULT_OK) return
         if (pendingPane !in panes.indices) return
         val uris = ArrayList<Uri>()
         data?.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
         if (uris.isEmpty()) data?.data?.let { uris.add(it) }
-        if (uris.isNotEmpty()) {
+        if (uris.isNotEmpty() && requestCode == REQ_BROWSE) {
             getSharedPreferences("prefs", MODE_PRIVATE).edit().putString("lastUri", uris.last().toString()).apply()
         }
         when {
@@ -506,6 +526,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_PICK = 1
+        private const val REQ_BROWSE = 2
         private const val DISPLAY_MAX = 3072
         private const val SAVE_MAX = 6000
     }

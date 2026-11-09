@@ -12,4 +12,4 @@ Build: `./gradlew assembleDebug` (APK in `app/build/outputs/apk/debug/`). The Gi
 
 - Long-press > "Image size" shrinks the image pair toward the center of the screen (100% down to 40%) so your eyes need less travel to fuse them. The choice is remembered.
 - Tap a half and select **two** photos at once in the picker: the first goes to the half you tapped, the second to the other half. Long-press > "Swap left and right images" flips them.
-- The picker reopens at the location of the last photo you chose.
+- Tapping uses the system photo picker (checkboxes, pick two). Long-press > "Browse files" uses the file picker, which reopens in the folder of the last photo chosen that way.
