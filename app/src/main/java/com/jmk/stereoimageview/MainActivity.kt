@@ -212,7 +212,7 @@ class MainActivity : Activity() {
         frame.addView(zoomView, FrameLayout.LayoutParams(-1, -1))
 
         val hint = TextView(this).apply {
-            text = "Tap to load $name image"
+            text = "Tap to load $name image\n(or pick two at once)"
             setTextColor(Color.GRAY)
             textSize = 16f
             gravity = Gravity.CENTER
@@ -257,6 +257,7 @@ class MainActivity : Activity() {
         val items = arrayOf(
             "Rotate left (90° counter-clockwise)",
             "Rotate right (90° clockwise)",
+            "Swap left and right images",
             "Save aligned image",
             if (linked) "Pan/zoom: moving BOTH (tap to adjust only this one)"
             else "Pan/zoom: moving only this one (tap to move BOTH)",
@@ -270,8 +271,9 @@ class MainActivity : Activity() {
                 when (which) {
                     0 -> rotate(index, -90)
                     1 -> rotate(index, 90)
-                    2 -> saveAligned(index)
-                    3 -> {
+                    2 -> swapPanes()
+                    3 -> saveAligned(index)
+                    4 -> {
                         linked = !linked
                         Toast.makeText(
                             this,
@@ -280,12 +282,27 @@ class MainActivity : Activity() {
                             Toast.LENGTH_SHORT
                         ).show()
                     }
-                    4 -> panes.forEach { it.view.setTransform(1f, 0f, 0f) }
-                    5 -> chooseSize()
-                    6 -> pick(index)
+                    5 -> panes.forEach { it.view.setTransform(1f, 0f, 0f) }
+                    6 -> chooseSize()
+                    7 -> pick(index)
                 }
             }
             .show()
+    }
+
+    private fun swapPanes() {
+        val a = panes[0]
+        val b = panes[1]
+        val ta = floatArrayOf(a.view.zoom, a.view.panX, a.view.panY)
+        val tb = floatArrayOf(b.view.zoom, b.view.panX, b.view.panY)
+        val uri = a.uri; a.uri = b.uri; b.uri = uri
+        val exif = a.exifMatrix; a.exifMatrix = b.exifMatrix; b.exifMatrix = exif
+        val base = a.base; a.base = b.base; b.base = base
+        val rot = a.rotation; a.rotation = b.rotation; b.rotation = rot
+        refresh(a)
+        refresh(b)
+        a.view.setTransform(tb[0], tb[1], tb[2])
+        b.view.setTransform(ta[0], ta[1], ta[2])
     }
 
     private fun rotate(index: Int, delta: Int) {
@@ -317,17 +334,31 @@ class MainActivity : Activity() {
         val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
             type = "image/*"
             addCategory(Intent.CATEGORY_OPENABLE)
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
         @Suppress("DEPRECATION")
-        startActivityForResult(Intent.createChooser(intent, "Select image"), REQ_PICK)
+        startActivityForResult(Intent.createChooser(intent, "Select 1 or 2 images"), REQ_PICK)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQ_PICK || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        if (pendingPane in panes.indices) loadInto(pendingPane, uri, 0, silent = false, transform = null)
+        if (pendingPane !in panes.indices) return
+        val uris = ArrayList<Uri>()
+        data?.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
+        if (uris.isEmpty()) data?.data?.let { uris.add(it) }
+        when {
+            uris.isEmpty() -> return
+            uris.size == 1 -> loadInto(pendingPane, uris[0], 0, silent = false, transform = null)
+            else -> {
+                // First pick goes to the side you tapped, second to the other side.
+                val fresh = floatArrayOf(1f, 0f, 0f)
+                loadInto(pendingPane, uris[0], 0, silent = false, transform = fresh)
+                loadInto(1 - pendingPane, uris[1], 0, silent = false, transform = fresh)
+                if (uris.size > 2) Toast.makeText(this, "Using the first two images", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** [transform] = (zoom, panX, panY) to restore, or null to line up with the other image. */
