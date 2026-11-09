@@ -14,6 +14,7 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
 import android.view.GestureDetector
@@ -331,13 +332,20 @@ class MainActivity : Activity() {
 
     private fun pick(index: Int) {
         pendingPane = index
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        // OPEN_DOCUMENT honours EXTRA_INITIAL_URI, so the picker can reopen where the last photo came from.
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             type = "image/*"
             addCategory(Intent.CATEGORY_OPENABLE)
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            try {
+                getSharedPreferences("prefs", MODE_PRIVATE).getString("lastUri", null)?.let {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it))
+                }
+            } catch (_: Throwable) {
+            }
         }
         @Suppress("DEPRECATION")
-        startActivityForResult(Intent.createChooser(intent, "Select 1 or 2 images"), REQ_PICK)
+        startActivityForResult(intent, REQ_PICK)
     }
 
     @Deprecated("Deprecated in Java")
@@ -348,6 +356,9 @@ class MainActivity : Activity() {
         val uris = ArrayList<Uri>()
         data?.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
         if (uris.isEmpty()) data?.data?.let { uris.add(it) }
+        if (uris.isNotEmpty()) {
+            getSharedPreferences("prefs", MODE_PRIVATE).edit().putString("lastUri", uris.last().toString()).apply()
+        }
         when {
             uris.isEmpty() -> return
             uris.size == 1 -> loadInto(pendingPane, uris[0], 0, silent = false, transform = null)
