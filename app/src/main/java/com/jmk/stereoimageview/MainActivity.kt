@@ -1,9 +1,11 @@
 package com.jmk.stereoimageview
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -332,8 +334,52 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- picking / loading
 
-    /** Normal tap: the system photo picker with checkboxes, so two photos can be ticked at once. */
+    private fun hasPhotoAccess(): Boolean {
+        fun ok(perm: String) = checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+        return if (Build.VERSION.SDK_INT >= 33) {
+            ok(Manifest.permission.READ_MEDIA_IMAGES) ||
+                (Build.VERSION.SDK_INT >= 34 && ok(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED))
+        } else {
+            ok(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    /** Normal tap: our own photo grid (checkboxes, reopens where you left off). */
     private fun pick(index: Int) {
+        pendingPane = index
+        if (hasPhotoAccess()) {
+            openGallery()
+        } else {
+            val perms = when {
+                Build.VERSION.SDK_INT >= 34 -> arrayOf(
+                    Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                )
+                Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+                else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            requestPermissions(perms, REQ_PERM)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_PERM) return
+        if (hasPhotoAccess()) {
+            openGallery()
+        } else {
+            Toast.makeText(this, "No photo access, using the system picker", Toast.LENGTH_LONG).show()
+            systemPick(pendingPane)
+        }
+    }
+
+    private fun openGallery() {
+        val intent = Intent(this, PickerActivity::class.java).putExtra(PickerActivity.EXTRA_FIRST_SIDE, pendingPane)
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQ_GALLERY)
+    }
+
+    /** Fallback: the system photo picker with checkboxes (no resume position). */
+    private fun systemPick(index: Int) {
         pendingPane = index
         val intent = if (Build.VERSION.SDK_INT >= 33) {
             Intent(MediaStore.ACTION_PICK_IMAGES).apply {
@@ -371,7 +417,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if ((requestCode != REQ_PICK && requestCode != REQ_BROWSE) || resultCode != RESULT_OK) return
+        if (requestCode !in listOf(REQ_PICK, REQ_BROWSE, REQ_GALLERY) || resultCode != RESULT_OK) return
         if (pendingPane !in panes.indices) return
         val uris = ArrayList<Uri>()
         data?.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
@@ -527,6 +573,8 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_PICK = 1
         private const val REQ_BROWSE = 2
+        private const val REQ_GALLERY = 3
+        private const val REQ_PERM = 4
         private const val DISPLAY_MAX = 3072
         private const val SAVE_MAX = 6000
     }
